@@ -1,0 +1,2 @@
+class EchoDownloaderExceptions(Exception):
+    pass
