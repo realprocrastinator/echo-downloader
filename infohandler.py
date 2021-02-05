@@ -123,6 +123,7 @@ class EchoCloudMedia(EchoCloundSubject):
         self._num_vedios = None
         self._videos = []
         self._m3u8_urls_all = []
+        self._medias_all = defaultdict(lambda: defaultdict(list))
 
     def video_url(self, video_id):
         return f"{self.domain_name}/lesson/{video_id}/classroom"
@@ -136,9 +137,9 @@ class EchoCloudMedia(EchoCloundSubject):
         return self._videos
 
     def _get_video_id_and_time(self, video_json):
-        video_id = None
-        start_date = None
-        video_name = None
+        video_id = "Unknown_ID"
+        start_date = "Unknown_Date"
+        video_name = "Unknown_Name"
 
         try:
             # get vedio id
@@ -147,21 +148,22 @@ class EchoCloudMedia(EchoCloundSubject):
             self._logger.warning("Can't find the correct entry of vedio id")
 
         try:
-            # get vedio id
-            video_name = str(video_json["lesson"]["lesson"]["name"])
-        except KeyError:
-            self._logger.warning("Can't find the correct entry of vedio name")
-
-        try:
             # get date info
             # ignore the error when parsing the date
             start_date = str(video_json["lesson"]["lesson"]["timing"]["start"])
         except:
             self._logger.warning("Can't find the correct entry of time")
 
+        try:
+            # get vedio name
+            video_name = str(video_json["lesson"]["lesson"]["name"].split()[0]) + \
+                '_' + re.sub("[^0-9a-zA-Z-_]", "_", start_date)
+        except KeyError:
+            self._logger.warning("Can't find the correct entry of vedio name")
+
         return video_id, video_name, start_date
 
-    def retrieve_videos_list(self):
+    def retrieve_videos_list(self, groups=None):
         subject_data = self.retrieve_subject_info()
         try:
             videos_json = subject_data["data"]
@@ -278,9 +280,14 @@ class EchoCloudMedia(EchoCloundSubject):
                     chunk_url_a, chunk_url_v = base_url + chunk_a, base_url + chunk_v,
 
                     video.set_chunk_a_v_urls_dic(chunk_url_a, chunk_url_v)
-                    # TODO(Andy): get chunk list from the current m3u8
-                    video.media += [base_url + str(e)
-                                    for e in self.get_chunk_files(video)]
+
+                    # get chunk list from the current m3u8
+                    a_chunk_files, v_chunk_files = self.get_chunk_files(video)
+
+                    video.media['a'] += [base_url + str(e)
+                                         for e in a_chunk_files]
+                    video.media['v'] += [base_url + str(e)
+                                         for e in v_chunk_files]
 
                 except Exception as e:
                     self._logger.error(
@@ -289,7 +296,11 @@ class EchoCloudMedia(EchoCloundSubject):
                         f"Exception occured: {e}")
 
         # return all the downloadable links
-        return [url for v in Media.videos for url in v.media]
+        for v in self.videos:
+            self._medias_all[str(v.name)]['audio'] = v.media['a']
+            self._medias_all[str(v.name)]['video'] = v.media['v']
+
+        return self._medias_all
 
     def get_chunk_files(self, video):
         v_urls = video._chunk_urls["v"]
@@ -324,9 +335,7 @@ class EchoCloudMedia(EchoCloundSubject):
                 return None
             a = a.union(extractor.media_files_from(r.content.decode('utf-8')))
 
-        m = v.union(a)
-
-        return list(m)
+        return list(a), list(v)
 
 
 class Video(object):
@@ -338,7 +347,7 @@ class Video(object):
         self._m3u8_urls = None
         self._chunk_urls = {'v': [], 'a': []}
         # TODO(Andy): if it is possible that one video can be seperated into several parts
-        self._media = []
+        self._media = {'v': [], 'a': []}
 
     @ property
     def id(self):
@@ -401,7 +410,6 @@ if __name__ == "__main__":
     driver.get("{0}/section/{1}/syllabus".format(domain_name, uuid))
 
     Media = EchoCloudMedia(domain_name, uuid, driver)
-    Media.web_driver = driver
 
     # info = subject.retrieve_subject_info()
 
@@ -409,6 +417,4 @@ if __name__ == "__main__":
 
     videos_list = Media.retrieve_videos_list()
     m3u8_urls = Media.retrieve_m3u8_urls()
-    if Media.retrieve_media_urls(m3u8_urls):
-        l = [url for v in Media.videos for url in v.media]
-        print(l)
+    print(Media.retrieve_media_urls(m3u8_urls))
