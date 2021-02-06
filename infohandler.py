@@ -1,12 +1,12 @@
 from exceptions import EchoDownloaderExceptions
 from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
+from collections import defaultdict
 import logging
 import requests
 import json
 import extractor
 import sys
 import re
-from collections import defaultdict
 
 
 def display_video_retrieval_progress(cur, tot):

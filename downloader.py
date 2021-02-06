@@ -1,12 +1,13 @@
-from infohandler import EchoCloud
-from exceptions import EchoDownloaderExceptions
 import threading
 import random
 import sys
 import os
 import requests
-from collections import defaultdict, OrderedDict
 import queue
+import tqdm
+from infohandler import EchoCloud
+from exceptions import EchoDownloaderExceptions
+from collections import defaultdict, OrderedDict
 
 
 class Downloader(object):
@@ -31,10 +32,10 @@ class Downloader(object):
 
         if progress <= 0:
             progress = 0
-            status = "Waiting..."
+            status = " Waiting\r\n"
         elif progress >= 1:
             progress = 1
-            status += "Done!"
+            status += " Done!\r\n"
 
         block = "=" * int(round(bar_len * progress))
         if len(block) < bar_len:
@@ -42,16 +43,24 @@ class Downloader(object):
 
         progress_bar = block + " " * (bar_len - len(block))
 
-        text = f"\r{title}: [{progress_bar}] {progress * 100:.2f}% {status}\n"
+        text = f"{title}: [{progress_bar}] {progress * 100:.2f}% {status}\n"
         return text
 
     def init_progress(self, worker_id):
-        self._progress[worker_id] = "Waiting...\n"
+        self._progress[worker_id] = "Waiting\r\n"
+
+    def cls(self):
+        sys.stdout.write('\033[2J\033[H')  # clear screen
 
     def display_progress_bar(self):
-        sys.stdout.write('\033[2J\033[H')  # clear screen
-        for id, text in self.progress.items():
+        # A hacky way to move the cursor :)
+        def move(y, x):
+            print("\033[%d;%dH" % (y, x))
+
+        for pos, (id, text) in enumerate(self.progress.items()):
+            move(pos, 0)
             sys.stdout.write(text)
+
         sys.stdout.flush()
 
     @property
@@ -154,19 +163,21 @@ class Downloader(object):
                 self.update_status(url, current_size, total_size)
                 output_path = os.path.join(self._output_dir, output_file)
 
-                with open(output_path, "wb") as f:
-                    for chunk in r.iter_content(self._chunk_size):
-                        f.write(chunk)
-                        current_size += self._chunk_size
-                        # self.update_progress_bar(url, current_size, total_size)
-                        self.update_status(url, current_size, total_size)
+                with tqdm.tqdm(total=total_size, unit='iB', unit_scale=True) as pbar:
+                    with open(output_path, "wb") as f:
+                        for chunk in r.iter_content(self._chunk_size):
+                            f.write(chunk)
+                            current_size += self._chunk_size
+                            # self.update_progress_bar(url, current_size, total_size)
+                            # self.update_status(url, current_size, total_size)
+                            pbar.update(len(chunk))
 
                 # success! list object is thread-safe
-                self._succeeded[url] = output_file
+                self._succeeded[url] = output_path
                 return
 
             except EnvironmentError as e:
-                print(f"\r\nFailed to write to file with exception:\n {e}")
+                print(f"Failed to write to file with exception:\n {e}")
             except Exception as e:
                 retry -= 1
                 print(f"Exception happened due to {e}. Retrying...")
