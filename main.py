@@ -5,22 +5,233 @@ import argparse
 from webdriver import WebBrowser
 from infohandler import *
 from downloader import *
-# from selenium import webdriver
-# from selenium.webdriver.chrome.options import Options
+from exceptions import EchoDownloaderExceptions
+# from selenium import webdriver# from selenium.webdriver.chrome.options import Options
 # from selenium.webdriver.common.by import By
 # from selenium.webdriver.support.ui import WebDriverWait
 # from selenium.webdriver.support import expected_conditions as EC
 
 # global section
 DEBUG = True
+LOGGER = _LOGGER = logging.getLogger(__name__)
 
 
-def parse_args():
-    pass
+def handle_args():
+    parser = argparse.ArgumentParser(
+        description="Downloa lectures from Echo360Cloud.",
+    )
+
+    parser.add_argument(
+        "url",
+        help="The url of Course home page.",
+
+    )
+
+    parser.add_argument(
+        "--output",
+        "-o",
+        help="Path to the desired output directory. The output director \
+            must exist. Otherwise the default directory is used.",
+    )
+
+    parser.add_argument(
+        "--entry_email",
+        '-e',
+        help="Your email for accessing the echo360 Cloud login page. \
+            Usually it's in format: 'name@student.unsw.edu.au'.",
+
+    )
+
+    parser.add_argument(
+        "--username",
+        '-u',
+        help="username for echo360. (eg.zid@ad.unsw.edu.au)",
+    )
+
+    parser.add_argument(
+        "--password",
+        '-p',
+        help="Your passwrd for echo360 account.",
+    )
+
+    parser.add_argument(
+        "--interactive",
+        '-i',
+        action="store_true",
+        default=False,
+        help="Interactively pick the lectures you want, instead of download all \
+                              (default) or based on dates .",
+    )
+
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=False,
+        help="Enable extensive logging and debug mode.",
+    )
+
+    parser.add_argument(
+        "--cmd-line-mode",
+        action="store_true",
+        default=False,
+        help="Don't pop up the browser. All the actions will happen in the terminal. \
+            uni_email, echo username and password must be provided!"
+    )
+
+    parser.add_argument(
+        "--file",
+        '-f',
+        help="Download from the media description file. The file shoulbe be named \
+            with .echo extension."
+    )
+
+    args = vars(parser.parse_args())
+    course_homepage_url = args["url"]
+
+    output_path = (
+        os.path.expanduser(args["output"])
+        if args["output"] is not None
+        else None
+    )
+
+    output_path = output_path if os.path.isdir(output_path) else \
+        None
+
+    domain_name = extractor.get_domain_name(course_homepage_url)
+    uuid = extractor.get_uuid(course_homepage_url)
+
+    user_email = args["entry_email"]
+    user_name = args["username"]
+
+    echo_file_path = os.path.expanduser(args["file"]) if args["file"] else None
+
+    return (course_homepage_url,
+            domain_name,
+            uuid,
+            user_email,
+            user_name,
+            output_path,
+            echo_file_path,
+            args["interactive"],
+            args["debug"],
+            args["cmd-line-mode"])
 
 
 def main():
-    pass
+    (course_homepage_url,
+     domain_name,
+     uuid,
+     user_email,
+     user_name,
+     user_passwrd,
+     output_path,
+     echo_file_path,
+     mode_interactive,
+     mode_debug,
+     mode_cmdl) = handle_args()
+
+    # regular check
+    if not domain_name or not uuid:
+        print("No correct domain name or uuid found. Please make sure the url is \
+            correct and belongs to Echo360 Cloud.")
+
+    login_mode = "browser"
+    if mode_cmdl:
+        if not user_email or not user_name:
+            print("Credentials must be provided in cmd-line mode.")
+            # TODO(Andy): add erro code system
+            return -1
+        login_mode = "cmd"
+
+    DEBUG = mode_debug
+
+    # if echo file provided, we need to parse the echo file,
+    # and download from it directly.
+
+    # init web driver
+    web_browser = WebBrowser()
+    web_driver = web_browser.web_driver
+    if not web_driver:
+        print("Can't initialize the web driver.")
+        raise EchoDownloaderExceptions("Driver not installed.")
+
+    # login
+    res = web_browser.login(course_homepage_url,
+                            user_email,
+                            user_name,
+                            login_mode)
+
+    if not res:
+        print("Can't log in successfully.")
+        return -1
+
+    # retrieve the video info
+    web_browser.browse_to("{0}/section/{1}/syllabus".format(domain_name, uuid))
+    Media = EchoCloudMedia(domain_name, uuid, driver)
+    videos_list = Media.retrieve_videos_list()
+    m3u8_urls = Media.retrieve_m3u8_urls()
+    Media.retrieve_media_urls(m3u8_urls)
+
+    downloader = Downloader()
+    downloader.config_dowloader(session=Media.session)
+
+    print("> Downloading...")
+    for video in Media.videos:
+        # create workers
+        for k, v in video.media.items():
+            # a{video_name}_s010.ms4
+            for url in v:
+                output_file = str(k) + str(video.name) + "_" + \
+                    str(url.split('/')[-1])
+                downloader.create_workers(
+                    group=video.name, target=downloader.download, args=(url, output_file))
+                # init progress
+                # downloader.init_progress(url)
+                # downloader.display_progress_bar()
+
+    # TODO(Andy): add group feature so that we can download a group of videos
+    if DEBUG:
+        downloader.start_all(groups=[Media.videos[0].name])
+    else:
+        downloader.start_all()
+
+    # not need to call this
+    if DEBUG:
+        downloader.barrier(groups=[Media.videos[0].name])
+    else:
+        downloader.barrier()
+
+    print("> Converting to mp4 file...")
+    # convert to ffmpeg
+    for v in Media.videos:
+        # check if downloading completed
+        print(f"Converting {v.name}")
+
+        # TODO(Andy): how to handle multiple a/v files?
+        in_audio = None
+        in_video = None
+
+        # get audio file
+        for url in v.media['a']:
+            if url in downloader.downloaded:
+                in_audio = downloader.downloaded[url]
+            else:
+                print(f"Missing autio file of {v.name} from url: {url}")
+
+        # get video file
+        for url in v.media['v']:
+            if url in downloader.downloaded:
+                in_video = downloader.downloaded[url]
+            else:
+                print(f"Missing vedio file of {v.name} from url: {url}")
+
+        # actual convert
+        if in_audio and in_video:
+            convert_to_mp4(in_audio, in_video, os.path.join(
+                downloader._output_dir, v.name + ".mp4"))
+
+        if DEBUG:
+            break
 
 
 def convert_to_mp4(faudio, fvideo, fout):
