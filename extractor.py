@@ -7,7 +7,7 @@ def get_domain_name(url):
 
 
 def get_uuid(url):
-    res = re.search("[^/]([0-9a-zA-Z]+[-])+[0-9a-zA-Z]+")
+    res = re.search("[^/]([0-9a-zA-Z]+[-])+[0-9a-zA-Z]+", url)
     return res.group() if res else ""
 
 

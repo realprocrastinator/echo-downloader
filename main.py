@@ -2,6 +2,7 @@ import ffmpy
 import os
 import sys
 import argparse
+import json
 from webdriver import WebBrowser
 from infohandler import *
 from downloader import *
@@ -13,7 +14,7 @@ from exceptions import EchoDownloaderExceptions
 
 # global section
 DEBUG = True
-LOGGER = _LOGGER = logging.getLogger(__name__)
+LOGGER = logging.getLogger(__name__)
 
 
 def handle_args():
@@ -35,7 +36,7 @@ def handle_args():
     )
 
     parser.add_argument(
-        "--entry_email",
+        "--entry-email",
         '-e',
         help="Your email for accessing the echo360 Cloud login page. \
             Usually it's in format: 'name@student.unsw.edu.au'.",
@@ -85,6 +86,26 @@ def handle_args():
             with .echo extension."
     )
 
+    parser.add_argument(
+        "--dump-to",
+        "-d",
+        help="Dumping all videos to json which can be fed into downloader later."
+    )
+
+    parser.add_argument(
+        "--single-thread-mode",
+        action="store_true",
+        default=False,
+        help="Downloading videos and audios one after one."
+    )
+
+    parser.add_argument(
+        "--no-downloading-mode",
+        action="store_true",
+        default=False,
+        help="Only extracting media info without downloading."
+    )
+
     args = vars(parser.parse_args())
     course_homepage_url = args["url"]
 
@@ -94,8 +115,10 @@ def handle_args():
         else None
     )
 
-    output_path = output_path if os.path.isdir(output_path) else \
-        None
+    # video/audio output path
+    if output_path:
+        output_path = output_path if os.path.isdir(output_path) else \
+            None
 
     domain_name = extractor.get_domain_name(course_homepage_url)
     uuid = extractor.get_uuid(course_homepage_url)
@@ -103,7 +126,12 @@ def handle_args():
     user_email = args["entry_email"]
     user_name = args["username"]
 
-    echo_file_path = os.path.expanduser(args["file"]) if args["file"] else None
+    echo_file_path = os.path.expanduser(
+        args["file"]) if args["file"] else None
+
+    # echo media file output path
+    dump_path = os.path.expanduser(
+        args["dump_to"]) if args["dump_to"] else None
 
     return (course_homepage_url,
             domain_name,
@@ -112,9 +140,12 @@ def handle_args():
             user_name,
             output_path,
             echo_file_path,
+            dump_path,
             args["interactive"],
             args["debug"],
-            args["cmd-line-mode"])
+            args["cmd_line_mode"],
+            args["single_thread_mode"],
+            args["no_downloading_mode"])
 
 
 def main():
@@ -123,12 +154,14 @@ def main():
      uuid,
      user_email,
      user_name,
-     user_passwrd,
      output_path,
      echo_file_path,
+     dump_path,
      mode_interactive,
      mode_debug,
-     mode_cmdl) = handle_args()
+     mode_cmdl,
+     mode_single_thread,
+     mode_no_downloading) = handle_args()
 
     # regular check
     if not domain_name or not uuid:
@@ -159,7 +192,7 @@ def main():
     res = web_browser.login(course_homepage_url,
                             user_email,
                             user_name,
-                            login_mode)
+                            mode=login_mode)
 
     if not res:
         print("Can't log in successfully.")
@@ -167,15 +200,38 @@ def main():
 
     # retrieve the video info
     web_browser.browse_to("{0}/section/{1}/syllabus".format(domain_name, uuid))
-    Media = EchoCloudMedia(domain_name, uuid, driver)
+    Media = EchoCloudMedia(domain_name, uuid, web_driver)
     videos_list = Media.retrieve_videos_list()
     m3u8_urls = Media.retrieve_m3u8_urls()
     Media.retrieve_media_urls(m3u8_urls)
 
+    if dump_path:
+        try:
+            with open(dump_path, 'w') as f:
+                print(
+                    f"Dumping the media info to {str(dump_path)}")
+                # do dump
+                f.write(json.dumps(
+                    Media.medias,
+                    indent=2)
+                )
+        except Exception as e:
+            LOGGER.error(
+                f"Failed to dump to path {dump_path}\n with error: {e}")
+            print("Can't dump the media info file. Please examine the log file.")
+
     downloader = Downloader()
-    downloader.config_dowloader(session=Media.session)
+    downloader.config_dowloader(session=Media.session, output_dir=output_path)
+
+    if not mode_no_downloading:
+        do_download(Media, downloader, mode_single_thread)
+        do_convert(Media, downloader)
+
+
+def do_download(Media, downloader, single_thread=False):
 
     print("> Downloading...")
+    # TODO: single downloading mode and multithreding downloading mode.
     for video in Media.videos:
         # create workers
         for k, v in video.media.items():
@@ -201,38 +257,6 @@ def main():
     else:
         downloader.barrier()
 
-    print("> Converting to mp4 file...")
-    # convert to ffmpeg
-    for v in Media.videos:
-        # check if downloading completed
-        print(f"Converting {v.name}")
-
-        # TODO(Andy): how to handle multiple a/v files?
-        in_audio = None
-        in_video = None
-
-        # get audio file
-        for url in v.media['a']:
-            if url in downloader.downloaded:
-                in_audio = downloader.downloaded[url]
-            else:
-                print(f"Missing autio file of {v.name} from url: {url}")
-
-        # get video file
-        for url in v.media['v']:
-            if url in downloader.downloaded:
-                in_video = downloader.downloaded[url]
-            else:
-                print(f"Missing vedio file of {v.name} from url: {url}")
-
-        # actual convert
-        if in_audio and in_video:
-            convert_to_mp4(in_audio, in_video, os.path.join(
-                downloader._output_dir, v.name + ".mp4"))
-
-        if DEBUG:
-            break
-
 
 def convert_to_mp4(faudio, fvideo, fout):
     if os.path.exists(fout):
@@ -247,81 +271,7 @@ def convert_to_mp4(faudio, fvideo, fout):
     ff.run()
 
 
-if __name__ == "__main__":
-    # log in
-
-    # uni test
-    domain_name = "https://echo360.org.au"
-    uuid = "7779731f-9279-4ec7-8460-e5604d92245a"
-    user_email = "jiawei.gao@student.unsw.edu.au"
-    user_name = "z5242283@ad.usnw.edu.au"
-    pwd = "kmh961127_"
-
-    opts = Options()
-    opts.add_argument("--no-sandbox")
-    # opts.add_argument("--no-startup-window")
-
-    driver = webdriver.Chrome(options=opts)
-    driver.get("{0}/section/{1}/syllabus".format(domain_name, uuid))
-
-    # for debugging
-    # ele = driver.find_elements_by_id(
-    #     "email")
-    # if not ele:
-    #     print("Can't find such element with 'email' id.")
-    # errors = ele[0].send_keys(user_email)
-    # e_msg = "Incorrect username or password."
-    # if errors:
-    #     print(f"[!] Login failed with reason: {e_msg}")
-    # else:
-    #     print("[+] Login successful")
-
-    # ele = driver.find_element_by_id("submitBtn").click()
-    # errors = driver.find_elements_by_id(
-    #     "addId").send_keys(user_email)
-
-    # retrieve the video info and m3u8 urls
-    Media = EchoCloudMedia(domain_name, uuid, driver)
-    videos_list = Media.retrieve_videos_list()
-    m3u8_urls = Media.retrieve_m3u8_urls()
-    Media.retrieve_media_urls(m3u8_urls)
-
-    # download!
-    downloader = Downloader()
-    downloader.config_dowloader(session=Media.session)
-
-    print("> Downloading...")
-    for video in Media.videos:
-        # create workers
-        for k, v in video.media.items():
-            # a{video_name}_s010.ms4
-            for url in v:
-                output_file = str(k) + str(video.name) + "_" + \
-                    str(url.split('/')[-1])
-                downloader.create_workers(
-                    group=video.name, target=downloader.download, args=(url, output_file))
-                # init progress
-                # downloader.init_progress(url)
-                # downloader.display_progress_bar()
-
-    if DEBUG:
-        downloader.start_all(groups=[Media.videos[0].name])
-    else:
-        downloader.start_all()
-
-    # clear screen
-    # downloader.cls()
-
-    # while any(w.is_alive() for g in downloader.workers.values() for w in g):
-    #     while not downloader.status.empty():
-    #         id, current, total = downloader.status.get()
-    #         downloader.progress[id] = downloader.update_progress_bar(
-    #             id, current, total)
-    #         downloader.display_progress_bar()
-
-    # not need to call this
-    # downloader.barrier(groups=[Media.videos[0].name])
-
+def do_convert(Media, downloader):
     print("> Converting to mp4 file...")
     # convert to ffmpeg
     for v in Media.videos:
@@ -353,3 +303,112 @@ if __name__ == "__main__":
 
         if DEBUG:
             break
+
+
+if __name__ == "__main__":
+    # # log in
+
+    # # uni test
+    # domain_name = "https://echo360.org.au"
+    # uuid = "7779731f-9279-4ec7-8460-e5604d92245a"
+    # user_email = "jiawei.gao@student.unsw.edu.au"
+    # user_name = "z5242283@ad.usnw.edu.au"
+    # pwd = "kmh961127_"
+
+    # opts = Options()
+    # opts.add_argument("--no-sandbox")
+    # # opts.add_argument("--no-startup-window")
+
+    # driver = webdriver.Chrome(options=opts)
+    # driver.get("{0}/section/{1}/syllabus".format(domain_name, uuid))
+
+    # # for debugging
+    # # ele = driver.find_elements_by_id(
+    # #     "email")
+    # # if not ele:
+    # #     print("Can't find such element with 'email' id.")
+    # # errors = ele[0].send_keys(user_email)
+    # # e_msg = "Incorrect username or password."
+    # # if errors:
+    # #     print(f"[!] Login failed with reason: {e_msg}")
+    # # else:
+    # #     print("[+] Login successful")
+
+    # # ele = driver.find_element_by_id("submitBtn").click()
+    # # errors = driver.find_elements_by_id(
+    # #     "addId").send_keys(user_email)
+
+    # # retrieve the video info and m3u8 urls
+    # Media = EchoCloudMedia(domain_name, uuid, driver)
+    # videos_list = Media.retrieve_videos_list()
+    # m3u8_urls = Media.retrieve_m3u8_urls()
+    # Media.retrieve_media_urls(m3u8_urls)
+
+    # # download!
+    # downloader = Downloader()
+    # downloader.config_dowloader(session=Media.session)
+
+    # print("> Downloading...")
+    # for video in Media.videos:
+    #     # create workers
+    #     for k, v in video.media.items():
+    #         # a{video_name}_s010.ms4
+    #         for url in v:
+    #             output_file = str(k) + str(video.name) + "_" + \
+    #                 str(url.split('/')[-1])
+    #             downloader.create_workers(
+    #                 group=video.name, target=downloader.download, args=(url, output_file))
+    #             # init progress
+    #             # downloader.init_progress(url)
+    #             # downloader.display_progress_bar()
+
+    # if DEBUG:
+    #     downloader.start_all(groups=[Media.videos[0].name])
+    # else:
+    #     downloader.start_all()
+
+    # # clear screen
+    # # downloader.cls()
+
+    # # while any(w.is_alive() for g in downloader.workers.values() for w in g):
+    # #     while not downloader.status.empty():
+    # #         id, current, total = downloader.status.get()
+    # #         downloader.progress[id] = downloader.update_progress_bar(
+    # #             id, current, total)
+    # #         downloader.display_progress_bar()
+
+    # # not need to call this
+    # # downloader.barrier(groups=[Media.videos[0].name])
+
+    # print("> Converting to mp4 file...")
+    # # convert to ffmpeg
+    # for v in Media.videos:
+    #     # check if downloading completed
+    #     print(f"Converting {v.name}")
+
+    #     # TODO(Andy): how to handle multiple a/v files?
+    #     in_audio = None
+    #     in_video = None
+
+    #     # get audio file
+    #     for url in v.media['a']:
+    #         if url in downloader.downloaded:
+    #             in_audio = downloader.downloaded[url]
+    #         else:
+    #             print(f"Missing autio file of {v.name} from url: {url}")
+
+    #     # get video file
+    #     for url in v.media['v']:
+    #         if url in downloader.downloaded:
+    #             in_video = downloader.downloaded[url]
+    #         else:
+    #             print(f"Missing vedio file of {v.name} from url: {url}")
+
+    #     # actual convert
+    #     if in_audio and in_video:
+    #         convert_to_mp4(in_audio, in_video, os.path.join(
+    #             downloader._output_dir, v.name + ".mp4"))
+
+    #     if DEBUG:
+    #         break
+    main()

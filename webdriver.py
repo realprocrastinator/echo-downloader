@@ -13,13 +13,13 @@ class WebBrowser(object):
     def __init__(self, browser_type="Chrome", opts=None, credentials=None, display=True):
         driver_opts = Options()
         # This is required to run in the root mode
-        opts.add_argument("--no-sandbox")
+        driver_opts.add_argument("--no-sandbox")
 
         if opts:
             for o in opts:
-                opts.add_argument(o)
+                driver_opts.add_argument(o)
 
-        self._driver = webdriver.Chrome(options=opts)
+        self._driver = webdriver.Chrome(options=driver_opts)
         self._session = None
 
     @property
@@ -30,7 +30,7 @@ class WebBrowser(object):
         self._driver.get(url)
 
     # login can be done via cmd line or in the browser
-    def login(self, login_url, user_email=None, username=None, pwd=None, mode="cmd"):
+    def login(self, login_url, user_email=None, username=None, mode="cmd"):
         if not self._driver:
             raise EchoDownloaderExceptions("Driver not installed error!")
 
@@ -40,7 +40,7 @@ class WebBrowser(object):
             # TODO(Andy): cmd line mode
             print("Feature not implemented yet!")
             res = False
-        elif mode == "broswer":
+        elif mode == "browser":
             # access the login session
             self._driver.get(login_url)
 
@@ -59,7 +59,7 @@ class WebBrowser(object):
             print("Please type your username and password.")
             try:
                 WebDriverWait(self._driver, WAIT_TIME).until(
-                    EC.presence_of_element_located((By.XPATH, "//pre[contains(text(), '\"status\":\"ok\"')]")))
+                    EC.presence_of_element_located((By.XPATH, "//*[@class='course-section-header']")))
             except Exception as e:
                 print("Failed to access the syllabus page.")
                 self._driver.close()

@@ -133,6 +133,10 @@ class EchoCloudMedia(EchoCloundSubject):
         return self._m3u8_urls_all
 
     @property
+    def medias(self):
+        return self._medias_all
+
+    @property
     def videos(self):
         return self._videos
 
