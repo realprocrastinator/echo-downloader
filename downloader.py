@@ -4,7 +4,7 @@ import sys
 import os
 import requests
 import queue
-#import tqdm
+import tqdm
 from infohandler import EchoCloud
 from exceptions import EchoDownloaderExceptions
 from collections import defaultdict, OrderedDict
