@@ -1,4 +1,4 @@
-import ffmpy
+#import ffmpy
 import os
 import sys
 import argparse
@@ -258,13 +258,13 @@ def do_download(Media, downloader, single_thread=False):
         downloader.barrier()
 
 
-def convert_to_mp4(faudio, fvideo, fout):
+def convert_to_mp4(faudios, fvideos, fout):
     if os.path.exists(fout):
         os.remove(fout)
 
     ff = ffmpy.FFmpeg(
         global_options="-loglevel panic",
-        inputs={fvideo: None, faudio: None},
+        inputs={f: None for f in fvideos + faudios},
         outputs={fout: ['-c:v', 'copy', '-c:a', 'ac3']}
     )
 
@@ -279,26 +279,26 @@ def do_convert(Media, downloader):
         print(f"Converting {v.name}")
 
         # TODO(Andy): how to handle multiple a/v files?
-        in_audio = None
-        in_video = None
+        in_audios = []
+        in_videos = []
 
         # get audio file
         for url in v.media['a']:
             if url in downloader.downloaded:
-                in_audio = downloader.downloaded[url]
+                in_audios.append(downloader.downloaded[url])
             else:
                 print(f"Missing autio file of {v.name} from url: {url}")
 
         # get video file
         for url in v.media['v']:
             if url in downloader.downloaded:
-                in_video = downloader.downloaded[url]
+                in_videos.append(downloader.downloaded[url])
             else:
                 print(f"Missing vedio file of {v.name} from url: {url}")
 
         # actual convert
-        if in_audio and in_video:
-            convert_to_mp4(in_audio, in_video, os.path.join(
+        if in_audios and in_videos:
+            convert_to_mp4(in_audios, in_videos, os.path.join(
                 downloader._output_dir, v.name + ".mp4"))
 
         if DEBUG:

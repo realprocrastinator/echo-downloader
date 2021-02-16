@@ -154,7 +154,7 @@ class EchoCloudMedia(EchoCloundSubject):
         try:
             # get date info
             # ignore the error when parsing the date
-            start_date = str(video_json["lesson"]["lesson"]["timing"]["start"])
+            start_date = str(video_json["lesson"]["lesson"]["createdAt"])
         except:
             self._logger.warning("Can't find the correct entry of time")
 
@@ -229,8 +229,9 @@ class EchoCloudMedia(EchoCloundSubject):
 
             try:
                 # the replace is for reversing the escape by the escapped js in the page source
+                # add "content" avoiding aws s3 format
                 urls = set(re.findall(
-                    'https://[^,"]*?[.]{}'.format("m3u8"),
+                    'https://content[^,"]*?[.]{}'.format("m3u8"),
                     self._web_driver.page_source.replace("\/", "/"))
                 )
                 break
@@ -301,8 +302,8 @@ class EchoCloudMedia(EchoCloundSubject):
 
         # return all the downloadable links
         for v in self.videos:
-            self._medias_all[str(v.name)]['audio'] = v.media['a']
-            self._medias_all[str(v.name)]['video'] = v.media['v']
+            self._medias_all[str(v.name)]['audio'] = list(set(v.media['a']))
+            self._medias_all[str(v.name)]['video'] = list(set(v.media['v']))
 
         return self._medias_all
 
